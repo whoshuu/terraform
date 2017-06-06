@@ -32,6 +32,7 @@ type InitCommand struct {
 func (c *InitCommand) Run(args []string) int {
 	var flagBackend, flagGet, flagGetPlugins bool
 	var flagConfigExtra map[string]interface{}
+	var pluginVendorDir string
 
 	args = c.Meta.process(args, false)
 	cmdFlags := c.flagSet("init")
@@ -43,6 +44,7 @@ func (c *InitCommand) Run(args []string) int {
 	cmdFlags.BoolVar(&c.Meta.stateLock, "lock", true, "lock state")
 	cmdFlags.DurationVar(&c.Meta.stateLockTimeout, "lock-timeout", 0, "lock timeout")
 	cmdFlags.BoolVar(&c.reconfigure, "reconfigure", false, "reconfigure")
+	cmdFlags.StringVar(&pluginVendorDir, "plugin-vendor-dir", "", "additional plugin vendor path")
 
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := cmdFlags.Parse(args); err != nil {
@@ -68,6 +70,17 @@ func (c *InitCommand) Run(args []string) int {
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error getting pwd: %s", err))
 		return 1
+	}
+
+	// make sure the vendor path is absolute, so that it is saved correctly in
+	// the config, which may be in a different directory.
+	if pluginVendorDir != "" {
+		path, err := filepath.Abs(pluginVendorDir)
+		if err != nil {
+			c.Ui.Error(fmt.Sprintf("Error getting absolute path for -plugin-vendor-dir: %s", err))
+			return 1
+		}
+		c.pluginVendorDir = path
 	}
 
 	// Get the path and source module to copy
@@ -362,7 +375,9 @@ Options:
 
   -no-color            If specified, output won't contain any color.
 
-  -reconfigure          Reconfigure the backend, ignoring any saved configuration.
+  -plugin-vendor-dir   Add a directory to the search path for plugins. 
+
+  -reconfigure         Reconfigure the backend, ignoring any saved configuration.
 `
 	return strings.TrimSpace(helpText)
 }

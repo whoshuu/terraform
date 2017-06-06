@@ -101,6 +101,8 @@ type Meta struct {
 	// init.
 	//
 	// reconfigure forces init to ignore any stored configuration.
+	//
+	// pluginVendorDir is a custom path to search for vendored plugins
 	statePath        string
 	stateOutPath     string
 	backupPath       string
@@ -111,6 +113,7 @@ type Meta struct {
 	stateLockTimeout time.Duration
 	forceInitCopy    bool
 	reconfigure      bool
+	pluginVendorDir  string
 }
 
 type PluginOverrides struct {
