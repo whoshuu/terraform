@@ -87,6 +87,14 @@ type State struct {
 	// Modules contains all the modules in a breadth-first order
 	Modules []*ModuleState `json:"modules"`
 
+	// PluginDigests records the digests of the plugins that were found during
+	// init.
+	PluginDigests map[string][]byte `json:"plugin-digests,omitempty"`
+
+	// PluginVendorDir is a custom path defined during init to locate vendored
+	// plugins
+	PluginVendorDir string `json:"plugin-vendor-dir,omitmepty"`
+
 	mu sync.Mutex
 }
 
