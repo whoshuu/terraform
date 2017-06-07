@@ -103,6 +103,8 @@ func (m *Meta) pluginDirs() []string {
 	} else {
 		dirs = append(dirs, filepath.Dir(exePath))
 	}
+
+	log.Printf("[DEBUG] plugin search path: %q", dirs)
 	return dirs
 }
 

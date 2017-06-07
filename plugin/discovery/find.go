@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"io/ioutil"
+	"log"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -52,9 +53,11 @@ func findPluginPaths(kind string, machineName string, dirs []string) []string {
 		baseItems, err := ioutil.ReadDir(baseDir)
 		if err != nil {
 			// Ignore missing dirs, non-dirs, etc
+			log.Printf("[DEBUG] skipping plugin dir entry %q: %s", baseDir, err)
 			continue
 		}
 
+		log.Printf("[DEBUG] searching plugin dir %q", baseDir)
 		for _, item := range baseItems {
 			fullName := item.Name()
 
@@ -66,8 +69,12 @@ func findPluginPaths(kind string, machineName string, dirs []string) []string {
 					continue
 				}
 
+				log.Printf("[DEBUG] searching plugin dir %q", machineDir)
+
 				for _, item := range machineItems {
 					fullName := item.Name()
+
+					log.Printf("[DEBUG] found %q in plugin dir", fullName)
 
 					if !strings.HasPrefix(fullName, prefix) {
 						continue
@@ -90,6 +97,7 @@ func findPluginPaths(kind string, machineName string, dirs []string) []string {
 			}
 
 			if strings.HasPrefix(fullName, prefix) {
+				log.Printf("[DEBUG] found legacy name %q in plugin dir %q", fullName, baseDir)
 				// Legacy style with files directly in the base directory
 				absPath, err := filepath.Abs(filepath.Join(baseDir, fullName))
 				if err != nil {
@@ -141,6 +149,7 @@ func ResolvePluginPaths(paths []string) PluginMetaSet {
 		}
 
 		parts := strings.SplitN(baseName, "-V", 2)
+
 		name := parts[0]
 		version := "0.0.0"
 		if len(parts) == 2 {

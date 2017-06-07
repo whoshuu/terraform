@@ -130,7 +130,9 @@ type testingOverrides struct {
 	Provisioners     map[string]terraform.ResourceProvisionerFactory
 }
 
-// LoadInitState call RefreshState on the underlying storage to load the InitState.
+// LoadInitState calls RefreshState on the underlying storage to load the InitState.
+// If the state lists a pPluginVendorDir, that is saved in the Meta struct so
+// that it will be returned in pluginDirs.
 func (m *Meta) LoadInitState() error {
 	if m.initState == nil {
 		s := &state.LocalState{
@@ -140,6 +142,10 @@ func (m *Meta) LoadInitState() error {
 			return err
 		}
 		m.initState = s.State()
+	}
+
+	if m.pluginVendorDir == "" {
+		m.pluginVendorDir = m.initState.PluginVendorDir
 	}
 
 	return nil

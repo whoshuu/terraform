@@ -1,6 +1,8 @@
 package command
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -666,6 +668,67 @@ func TestInit_providerLockFile(t *testing.T) {
 
 	if hex != expected {
 		t.Errorf("wrong provider lock file contents\ngot:  %s\nwant: %s", hex, expected)
+	}
+}
+
+func TestInit_pluginVendorDir(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("init-provider-lock-file"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// make a vendor directory for our plugins
+	vendorDir, err := filepath.Abs("./plugin-vendor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vendorDir, 0777); err != nil {
+		t.Fatal(err)
+	}
+
+	ui := new(cli.MockUi)
+	c := &InitCommand{
+		Meta: Meta{
+			Ui: ui,
+		},
+	}
+
+	// we don't need to run the provider, so just provide a dummy file in it's place
+	providerBinData := []byte("provider bin data")
+	testDigest := sha256.Sum256(providerBinData)
+
+	err = ioutil.WriteFile(
+		filepath.Join("./plugin-vendor", "terraform-provider-test-V1.2.3"),
+		providerBinData,
+		0755,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// supply the relative path as a argument, and make sure init finds the plugin
+	args := []string{"-plugin-vendor-dir", "./plugin-vendor"}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
+	}
+
+	// load up the state file and make sure the digest is in there
+	sMgr := &state.LocalState{
+		Path: filepath.Join(c.DataDir(), DefaultStateFilename),
+	}
+	if err := sMgr.RefreshState(); err != nil {
+		t.Fatal(err)
+	}
+	s := sMgr.State()
+
+	if s.PluginVendorDir != vendorDir {
+		t.Errorf("wrong plugin-vendor-dir.\ngot:  %q\nwant: %q", s.PluginVendorDir, vendorDir)
+	}
+
+	// check that the digest was saved correctly too
+	if !bytes.Equal(testDigest[:], s.PluginDigests["test"]) {
+		t.Fatal("incorrect plugin digest. exptected %x, got %x", testDigest, s.PluginDigests["test"])
 	}
 }
 
