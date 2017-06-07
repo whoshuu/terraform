@@ -262,10 +262,24 @@ func (c *InitCommand) getProviders(path string, state *terraform.State) error {
 		}
 		digests[name] = digest
 	}
-	err = c.providerPluginsLock().Write(digests)
-	if err != nil {
-		return fmt.Errorf("failed to save provider manifest: %s", err)
+
+	if err := c.LoadInitState(); err != nil {
+		return err
 	}
+
+	// this may still be nill if we didn't configure a backend
+	s := c.InitState()
+	if s == nil {
+		s = terraform.NewState()
+	}
+
+	s.PluginDigests = digests
+	s.PluginVendorDir = c.pluginVendorDir
+
+	if err := c.WriteInitState(s); err != nil {
+		return fmt.Errorf("failed to save plugin configuration: %s", err)
+	}
+	// PersistState is noop for LocalState
 
 	// If any providers have "floating" versions (completely unconstrained)
 	// we'll suggest the user constrain with a pessimistic constraint to

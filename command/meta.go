@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/terraform/helper/experiment"
 	"github.com/hashicorp/terraform/helper/variables"
 	"github.com/hashicorp/terraform/helper/wrappedstreams"
+	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/terraform"
 	"github.com/mitchellh/cli"
 	"github.com/mitchellh/colorstring"
@@ -56,6 +57,9 @@ type Meta struct {
 
 	// backendState is the currently active backend state
 	backendState *terraform.BackendState
+
+	// initState saves the state used for backend and plugin confniguration.
+	initState *terraform.State
 
 	// Variables for the context (private)
 	autoKey       string
@@ -124,6 +128,52 @@ type PluginOverrides struct {
 type testingOverrides struct {
 	ProviderResolver terraform.ResourceProviderResolver
 	Provisioners     map[string]terraform.ResourceProvisionerFactory
+}
+
+// LoadInitState call RefreshState on the underlying storage to load the InitState.
+func (m *Meta) LoadInitState() error {
+	if m.initState == nil {
+		s := &state.LocalState{
+			Path: filepath.Join(m.DataDir(), DefaultStateFilename),
+		}
+		if err := s.RefreshState(); err != nil {
+			return err
+		}
+		m.initState = s.State()
+	}
+
+	return nil
+}
+
+// store the state to be returned by InitState
+func (m *Meta) SetInitState(s *terraform.State) {
+	m.initState = s
+}
+
+// InitState returns the stored init configuration in a *terraform.State.
+func (m *Meta) InitState() *terraform.State {
+	if m.initState == nil {
+		m.initState = terraform.NewState()
+	}
+
+	return m.initState
+}
+
+// this writes the configuration data saved in the initConfigState to permanent
+// storage.
+func (m *Meta) WriteInitState(s *terraform.State) error {
+	sMgr := &state.LocalState{
+		Path: filepath.Join(m.DataDir(), DefaultStateFilename),
+	}
+
+	if err := sMgr.WriteState(s); err != nil {
+		return err
+	}
+
+	if err := sMgr.PersistState(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // initStatePaths is used to initialize the default values for
@@ -247,7 +297,9 @@ func (m *Meta) contextOpts() *terraform.ContextOpts {
 		opts.Provisioners = m.provisionerFactories()
 	}
 
-	opts.ProviderSHA256s = m.providerPluginsLock().Read()
+	if s := m.InitState(); s != nil {
+		opts.ProviderSHA256s = s.PluginDigests
+	}
 
 	opts.Meta = &terraform.ContextMeta{
 		Env: m.Env(),
@@ -460,12 +512,7 @@ func (m *Meta) outputShadowError(err error, output bool) bool {
 // Env returns the name of the currently configured environment, corresponding
 // to the desired named state.
 func (m *Meta) Env() string {
-	dataDir := m.dataDir
-	if m.dataDir == "" {
-		dataDir = DefaultDataDir
-	}
-
-	envData, err := ioutil.ReadFile(filepath.Join(dataDir, local.DefaultEnvFile))
+	envData, err := ioutil.ReadFile(filepath.Join(m.DataDir(), local.DefaultEnvFile))
 	current := string(bytes.TrimSpace(envData))
 	if current == "" {
 		current = backend.DefaultStateName

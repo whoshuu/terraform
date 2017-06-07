@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/go-multierror"
@@ -300,14 +299,12 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 	// Get the path to where we store a local cache of backend configuration
 	// if we're using a remote backend. This may not yet exist which means
 	// we haven't used a non-local backend before. That is okay.
-	statePath := filepath.Join(m.DataDir(), DefaultStateFilename)
-	sMgr := &state.LocalState{Path: statePath}
-	if err := sMgr.RefreshState(); err != nil {
+	if err := m.LoadInitState(); err != nil {
 		return nil, fmt.Errorf("Error loading state: %s", err)
 	}
 
 	// Load the state, it must be non-nil for the tests below but can be empty
-	s := sMgr.State()
+	s := m.InitState()
 	if s == nil {
 		log.Printf("[DEBUG] command: no data state file found for backend config")
 		s = terraform.NewState()
@@ -324,7 +321,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 	// we can access it for commands.
 	m.backendState = nil
 	defer func() {
-		if s := sMgr.State(); s != nil && !s.Backend.Empty() {
+		if s := m.InitState(); s != nil && !s.Backend.Empty() {
 			m.backendState = s.Backend
 		}
 	}()
@@ -347,11 +344,11 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 			return nil, errBackendInitRequired
 		}
 
-		return m.backend_c_r_S(c, sMgr, true)
+		return m.backend_c_r_S(c, true)
 
 	// We have a legacy remote state configuration but no new backend config
 	case c == nil && !s.Remote.Empty() && s.Backend.Empty():
-		return m.backend_c_R_s(c, sMgr)
+		return m.backend_c_R_s(c)
 
 	// We have a legacy remote state configuration simultaneously with a
 	// saved backend configuration while at the same time disabling backend
@@ -368,7 +365,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 			return nil, errBackendInitRequired
 		}
 
-		return m.backend_c_R_S(c, sMgr)
+		return m.backend_c_R_S(c)
 
 	// Configuring a backend for the first time.
 	case c != nil && s.Remote.Empty() && s.Backend.Empty():
@@ -380,7 +377,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 			return nil, errBackendInitRequired
 		}
 
-		return m.backend_C_r_s(c, sMgr)
+		return m.backend_C_r_s(c)
 
 	// Potentially changing a backend configuration
 	case c != nil && s.Remote.Empty() && !s.Backend.Empty():
@@ -394,7 +391,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 				hash = s.Backend.Rehash()
 			}
 			if hash == cHash {
-				return m.backend_C_r_S_unchanged(c, sMgr)
+				return m.backend_C_r_S_unchanged(c)
 			}
 		}
 
@@ -409,7 +406,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 		log.Printf(
 			"[WARN] command: backend config change! saved: %d, new: %d",
 			s.Backend.Hash, cHash)
-		return m.backend_C_r_S_changed(c, sMgr, true)
+		return m.backend_C_r_S_changed(c, true)
 
 	// Configuring a backend for the first time while having legacy
 	// remote state. This is very possible if a Terraform user configures
@@ -423,7 +420,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 			return nil, errBackendInitRequired
 		}
 
-		return m.backend_C_R_s(c, sMgr)
+		return m.backend_C_R_s(c)
 
 	// Configuring a backend with both a legacy remote state set
 	// and a pre-existing backend saved.
@@ -443,7 +440,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 				return nil, errBackendInitRequired
 			}
 
-			return m.backend_C_R_S_unchanged(c, sMgr, true)
+			return m.backend_C_R_S_unchanged(c, true)
 		}
 
 		if !opts.Init {
@@ -455,7 +452,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 		}
 
 		// We have change in all three
-		return m.backend_C_R_S_changed(c, sMgr)
+		return m.backend_C_R_S_changed(c)
 	default:
 		// This should be impossible since all state possibilties are
 		// tested above, but we need a default case anyways and we should
@@ -554,13 +551,9 @@ func (m *Meta) backendFromPlan(opts *BackendOpts) (backend.Backend, error) {
 			"[INFO] command: initializing legacy remote backend from plan: %s",
 			planState.Remote.Type)
 
-		// Write our current state to an inmemory state just so that we
-		// have it in the format of state.State
-		inmem := &state.InmemState{}
-		inmem.WriteState(planState)
-
+		m.SetInitState(planState)
 		// Get the backend through the normal means of legacy state
-		b, err = m.backend_c_R_s(nil, inmem)
+		b, err = m.backend_c_R_s(nil)
 
 	// Both set, this can't happen in a plan.
 	case !planState.Remote.Empty() && !planBackend.Empty():
@@ -670,8 +663,8 @@ func (m *Meta) backendFromPlan(opts *BackendOpts) (backend.Backend, error) {
 
 // Unconfiguring a backend (moving from backend => local).
 func (m *Meta) backend_c_r_S(
-	c *config.Backend, sMgr state.State, output bool) (backend.Backend, error) {
-	s := sMgr.State()
+	c *config.Backend, output bool) (backend.Backend, error) {
+	s := m.InitState()
 
 	// Get the backend type for output
 	backendType := s.Backend.Type
@@ -701,7 +694,7 @@ func (m *Meta) backend_c_r_S(
 		}
 
 		// Initialize the configured backend
-		b, err := m.backend_C_r_S_unchanged(c, sMgr)
+		b, err := m.backend_C_r_S_unchanged(c)
 		if err != nil {
 			return nil, fmt.Errorf(
 				strings.TrimSpace(errBackendSavedUnsetConfig), s.Backend.Type, err)
@@ -721,10 +714,7 @@ func (m *Meta) backend_c_r_S(
 
 	// Remove the stored metadata
 	s.Backend = nil
-	if err := sMgr.WriteState(s); err != nil {
-		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearSaved), err)
-	}
-	if err := sMgr.PersistState(); err != nil {
+	if err := m.WriteInitState(s); err != nil {
 		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearSaved), err)
 	}
 
@@ -739,9 +729,8 @@ func (m *Meta) backend_c_r_S(
 }
 
 // Legacy remote state
-func (m *Meta) backend_c_R_s(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
-	s := sMgr.State()
+func (m *Meta) backend_c_R_s(c *config.Backend) (backend.Backend, error) {
+	s := m.InitState()
 
 	// Warn the user
 	m.Ui.Warn(strings.TrimSpace(warnBackendLegacy) + "\n")
@@ -776,18 +765,17 @@ func (m *Meta) backend_c_R_s(
 }
 
 // Unsetting backend, saved backend, legacy remote state
-func (m *Meta) backend_c_R_S(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+func (m *Meta) backend_c_R_S(c *config.Backend) (backend.Backend, error) {
 	// Notify the user
 	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
 		"[reset]%s\n\n",
 		strings.TrimSpace(outputBackendUnsetWithLegacy))))
 
 	// Get the backend type for later
-	backendType := sMgr.State().Backend.Type
+	backendType := m.InitState().Backend.Type
 
 	// First, perform the configured => local tranasition
-	if _, err := m.backend_c_r_S(c, sMgr, false); err != nil {
+	if _, err := m.backend_c_r_S(c, false); err != nil {
 		return nil, err
 	}
 
@@ -798,7 +786,7 @@ func (m *Meta) backend_c_R_S(
 	}
 
 	// Grab the state
-	s := sMgr.State()
+	s := m.InitState()
 
 	// Ask the user if they want to migrate their existing remote state
 	copy := m.forceInitCopy
@@ -837,15 +825,12 @@ func (m *Meta) backend_c_R_S(
 	}
 
 	// Unset the remote state
-	s = sMgr.State()
+	s = m.InitState()
 	if s == nil {
 		s = terraform.NewState()
 	}
 	s.Remote = nil
-	if err := sMgr.WriteState(s); err != nil {
-		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
-	}
-	if err := sMgr.PersistState(); err != nil {
+	if err := m.WriteInitState(s); err != nil {
 		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
 	}
 
@@ -857,8 +842,7 @@ func (m *Meta) backend_c_R_S(
 }
 
 // Configuring a backend for the first time with legacy remote state.
-func (m *Meta) backend_C_R_s(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+func (m *Meta) backend_C_R_s(c *config.Backend) (backend.Backend, error) {
 	// Notify the user
 	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
 		"[reset]%s\n\n",
@@ -872,7 +856,7 @@ func (m *Meta) backend_C_R_s(
 
 	// Next, save the new configuration. This will not overwrite our
 	// legacy remote state. We'll handle that after.
-	s := sMgr.State()
+	s := m.InitState()
 	if s == nil {
 		s = terraform.NewState()
 	}
@@ -881,10 +865,7 @@ func (m *Meta) backend_C_R_s(
 		Config: c.RawConfig.Raw,
 		Hash:   c.Hash,
 	}
-	if err := sMgr.WriteState(s); err != nil {
-		return nil, fmt.Errorf(errBackendWriteSaved, err)
-	}
-	if err := sMgr.PersistState(); err != nil {
+	if err := m.WriteInitState(s); err != nil {
 		return nil, fmt.Errorf(errBackendWriteSaved, err)
 	}
 
@@ -933,15 +914,12 @@ func (m *Meta) backend_C_R_s(
 	}
 
 	// Unset the remote state
-	s = sMgr.State()
+	s = m.InitState()
 	if s == nil {
 		s = terraform.NewState()
 	}
 	s.Remote = nil
-	if err := sMgr.WriteState(s); err != nil {
-		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
-	}
-	if err := sMgr.PersistState(); err != nil {
+	if err := m.WriteInitState(s); err != nil {
 		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
 	}
 
@@ -953,8 +931,7 @@ func (m *Meta) backend_C_R_s(
 }
 
 // Configuring a backend for the first time.
-func (m *Meta) backend_C_r_s(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+func (m *Meta) backend_C_r_s(c *config.Backend) (backend.Backend, error) {
 	// Get the backend
 	b, err := m.backendInitFromConfig(c)
 	if err != nil {
@@ -1016,23 +993,8 @@ func (m *Meta) backend_C_r_s(
 		}
 	}
 
-	if m.stateLock {
-		lockCtx, cancel := context.WithTimeout(context.Background(), m.stateLockTimeout)
-		defer cancel()
-
-		// Lock the state if we can
-		lockInfo := state.NewLockInfo()
-		lockInfo.Operation = "backend from config"
-
-		lockID, err := clistate.Lock(lockCtx, sMgr, lockInfo, m.Ui, m.Colorize())
-		if err != nil {
-			return nil, fmt.Errorf("Error locking state: %s", err)
-		}
-		defer clistate.Unlock(sMgr, lockID, m.Ui, m.Colorize())
-	}
-
 	// Store the metadata in our saved state location
-	s := sMgr.State()
+	s := m.InitState()
 	if s == nil {
 		s = terraform.NewState()
 	}
@@ -1042,10 +1004,7 @@ func (m *Meta) backend_C_r_s(
 		Hash:   c.Hash,
 	}
 
-	if err := sMgr.WriteState(s); err != nil {
-		return nil, fmt.Errorf(errBackendWriteSaved, err)
-	}
-	if err := sMgr.PersistState(); err != nil {
+	if err := m.WriteInitState(s); err != nil {
 		return nil, fmt.Errorf(errBackendWriteSaved, err)
 	}
 
@@ -1058,8 +1017,7 @@ func (m *Meta) backend_C_r_s(
 }
 
 // Changing a previously saved backend.
-func (m *Meta) backend_C_r_S_changed(
-	c *config.Backend, sMgr state.State, output bool) (backend.Backend, error) {
+func (m *Meta) backend_C_r_S_changed(c *config.Backend, output bool) (backend.Backend, error) {
 	if output {
 		// Notify the user
 		m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
@@ -1068,7 +1026,7 @@ func (m *Meta) backend_C_r_S_changed(
 	}
 
 	// Get the old state
-	s := sMgr.State()
+	s := m.InitState()
 
 	// Get the backend
 	b, err := m.backendInitFromConfig(c)
@@ -1095,7 +1053,7 @@ func (m *Meta) backend_C_r_S_changed(
 	// perform the copy.
 	if copy {
 		// Grab the existing backend
-		oldB, err := m.backend_C_r_S_unchanged(c, sMgr)
+		oldB, err := m.backend_C_r_S_unchanged(c)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"Error loading previously configured backend: %s", err)
@@ -1113,23 +1071,8 @@ func (m *Meta) backend_C_r_S_changed(
 		}
 	}
 
-	if m.stateLock {
-		lockCtx, cancel := context.WithTimeout(context.Background(), m.stateLockTimeout)
-		defer cancel()
-
-		// Lock the state if we can
-		lockInfo := state.NewLockInfo()
-		lockInfo.Operation = "backend from config"
-
-		lockID, err := clistate.Lock(lockCtx, sMgr, lockInfo, m.Ui, m.Colorize())
-		if err != nil {
-			return nil, fmt.Errorf("Error locking state: %s", err)
-		}
-		defer clistate.Unlock(sMgr, lockID, m.Ui, m.Colorize())
-	}
-
 	// Update the backend state
-	s = sMgr.State()
+	s = m.InitState()
 	if s == nil {
 		s = terraform.NewState()
 	}
@@ -1139,10 +1082,7 @@ func (m *Meta) backend_C_r_S_changed(
 		Hash:   c.Hash,
 	}
 
-	if err := sMgr.WriteState(s); err != nil {
-		return nil, fmt.Errorf(errBackendWriteSaved, err)
-	}
-	if err := sMgr.PersistState(); err != nil {
+	if err := m.WriteInitState(s); err != nil {
 		return nil, fmt.Errorf(errBackendWriteSaved, err)
 	}
 
@@ -1156,16 +1096,15 @@ func (m *Meta) backend_C_r_S_changed(
 }
 
 // Initiailizing an unchanged saved backend
-func (m *Meta) backend_C_r_S_unchanged(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
-	s := sMgr.State()
+func (m *Meta) backend_C_r_S_unchanged(c *config.Backend) (backend.Backend, error) {
+	s := m.InitState()
 
 	// it's possible for a backend to be unchanged, and the config itself to
 	// have changed by moving a parameter from the config to `-backend-config`
 	// In this case we only need to update the Hash.
 	if c != nil && s.Backend.Hash != c.Hash {
 		s.Backend.Hash = c.Hash
-		if err := sMgr.WriteState(s); err != nil {
+		if err := m.WriteInitState(s); err != nil {
 			return nil, fmt.Errorf(errBackendWriteSaved, err)
 		}
 	}
@@ -1195,20 +1134,19 @@ func (m *Meta) backend_C_r_S_unchanged(
 }
 
 // Initiailizing a changed saved backend with legacy remote state.
-func (m *Meta) backend_C_R_S_changed(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+func (m *Meta) backend_C_R_S_changed(c *config.Backend) (backend.Backend, error) {
 	// Notify the user
 	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
 		"[reset]%s\n\n",
 		strings.TrimSpace(outputBackendSavedWithLegacyChanged))))
 
 	// Reconfigure the backend first
-	if _, err := m.backend_C_r_S_changed(c, sMgr, false); err != nil {
+	if _, err := m.backend_C_r_S_changed(c, false); err != nil {
 		return nil, err
 	}
 
 	// Handle the case where we have all set but unchanged
-	b, err := m.backend_C_R_S_unchanged(c, sMgr, false)
+	b, err := m.backend_C_R_S_unchanged(c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1222,8 +1160,7 @@ func (m *Meta) backend_C_R_S_changed(
 }
 
 // Initiailizing an unchanged saved backend with legacy remote state.
-func (m *Meta) backend_C_R_S_unchanged(
-	c *config.Backend, sMgr state.State, output bool) (backend.Backend, error) {
+func (m *Meta) backend_C_R_S_unchanged(c *config.Backend, output bool) (backend.Backend, error) {
 	if output {
 		// Notify the user
 		m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
@@ -1232,7 +1169,7 @@ func (m *Meta) backend_C_R_S_unchanged(
 	}
 
 	// Load the backend from the state
-	s := sMgr.State()
+	s := m.InitState()
 	b, err := m.backendInitFromSaved(s.Backend)
 	if err != nil {
 		return nil, err
@@ -1274,32 +1211,14 @@ func (m *Meta) backend_C_R_S_unchanged(
 		}
 	}
 
-	if m.stateLock {
-		lockCtx, cancel := context.WithTimeout(context.Background(), m.stateLockTimeout)
-		defer cancel()
-
-		// Lock the state if we can
-		lockInfo := state.NewLockInfo()
-		lockInfo.Operation = "backend from config"
-
-		lockID, err := clistate.Lock(lockCtx, sMgr, lockInfo, m.Ui, m.Colorize())
-		if err != nil {
-			return nil, fmt.Errorf("Error locking state: %s", err)
-		}
-		defer clistate.Unlock(sMgr, lockID, m.Ui, m.Colorize())
-	}
-
 	// Unset the remote state
-	s = sMgr.State()
+	s = m.InitState()
 	if s == nil {
 		s = terraform.NewState()
 	}
 	s.Remote = nil
 
-	if err := sMgr.WriteState(s); err != nil {
-		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
-	}
-	if err := sMgr.PersistState(); err != nil {
+	if err := m.WriteInitState(s); err != nil {
 		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
 	}
 
