@@ -5,11 +5,11 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform/helper/copy"
+	"github.com/hashicorp/terraform/state"
 	"github.com/mitchellh/cli"
 )
 
@@ -647,22 +647,25 @@ func TestInit_providerLockFile(t *testing.T) {
 		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
 	}
 
-	providersLockFile := fmt.Sprintf(
-		".terraform/plugins/%s_%s/providers.json",
-		runtime.GOOS, runtime.GOARCH,
-	)
-	buf, err := ioutil.ReadFile(providersLockFile)
-	if err != nil {
-		t.Fatalf("failed to read providers lock file %s: %s", providersLockFile, err)
+	// load up the state file and make sure the digest is in there
+	sMgr := &state.LocalState{
+		Path: filepath.Join(c.DataDir(), DefaultStateFilename),
 	}
-	// The hash in here is for the empty files that mockGetProvider produces
-	wantLockFile := strings.TrimSpace(`
-{
-  "test": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-}
-`)
-	if string(buf) != wantLockFile {
-		t.Errorf("wrong provider lock file contents\ngot:  %s\nwant: %s", buf, wantLockFile)
+	if err := sMgr.RefreshState(); err != nil {
+		t.Fatal(err)
+	}
+	s := sMgr.State()
+
+	if s.PluginDigests == nil {
+		t.Fatal("no plugin digests were saved")
+	}
+
+	hex := fmt.Sprintf("%x", s.PluginDigests["test"])
+
+	expected := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	if hex != expected {
+		t.Errorf("wrong provider lock file contents\ngot:  %s\nwant: %s", hex, expected)
 	}
 }
 
