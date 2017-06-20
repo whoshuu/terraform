@@ -106,7 +106,7 @@ func (g *AcyclicGraph) TransitiveReduction() {
 		uTargets := g.DownEdges(u)
 		vs := AsVertexList(g.DownEdges(u))
 
-		g.DepthFirstWalk(vs, func(v Vertex, d int) error {
+		g.unsortedDepthFirstWalk(vs, func(v Vertex, d int) error {
 			shared := uTargets.Intersection(g.DownEdges(v))
 			for _, vPrime := range AsVertexList(shared) {
 				g.RemoveEdge(BasicEdge(u, vPrime))
@@ -184,6 +184,48 @@ func AsVertexList(s *Set) []Vertex {
 type vertexAtDepth struct {
 	Vertex Vertex
 	Depth  int
+}
+
+// depthFirstWalk does a depth-first walk of the graph starting from
+// the vertices in start. This is not exported now but it would make sense
+// to export this publicly at some point.
+func (g *AcyclicGraph) unsortedDepthFirstWalk(start []Vertex, f DepthWalkFunc) error {
+	defer g.debug.BeginOperation(typeDepthFirstWalk, "").End("")
+	seen := make(map[Vertex]struct{})
+	frontier := make([]*vertexAtDepth, len(start))
+	for i, v := range start {
+		frontier[i] = &vertexAtDepth{
+			Vertex: v,
+			Depth:  0,
+		}
+	}
+	for len(frontier) > 0 {
+		// Pop the current vertex
+		n := len(frontier)
+		current := frontier[n-1]
+		frontier = frontier[:n-1]
+
+		// Check if we've seen this already and return...
+		if _, ok := seen[current.Vertex]; ok {
+			continue
+		}
+		seen[current.Vertex] = struct{}{}
+
+		// Visit the current node
+		if err := f(current.Vertex, current.Depth); err != nil {
+			return err
+		}
+
+		// Visit targets of this in a consistent order.
+		targets := AsVertexList(g.DownEdges(current.Vertex))
+		for _, t := range targets {
+			frontier = append(frontier, &vertexAtDepth{
+				Vertex: t,
+				Depth:  current.Depth + 1,
+			})
+		}
+	}
+	return nil
 }
 
 // depthFirstWalk does a depth-first walk of the graph starting from
