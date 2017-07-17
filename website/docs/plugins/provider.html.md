@@ -32,6 +32,44 @@ of this page will assume you're familiar with
 [plugin basics](/docs/plugins/basics.html) and that you already have
 a basic development environment setup.
 
+## Provider Plugin Codebases
+
+Provider plugins live outside of the Terraform core codebase in their own
+source code repositories. The official set of provider plugins released by
+Hashicorp (developed by both Hashicorp staff and community contributors)
+all live in repositories in
+[the `terraform-providers` organization](https://github.com/terraform-providers)
+on GitHub, but third-party plugins can be maintained in any source code
+repository.
+
+When developing a provider plugin, it is recommended to use a common `GOPATH`
+that includes both the core Terraform repository and the repositories of any
+providers being changed. This makes it easier to use a locally-built
+`terraform` executable and a set of locally-built provider plugins together
+without further configuration. For example, for the `template` provider:
+
+```
+$ go get github.com/hashicorp/terraform
+...
+$ go get github.com/terraform-providers/terraform-provider-template
+...
+$ go install github.com/hashicorp/terraform
+$ go install github.com/terraform-providers/terraform-provider-template
+```
+
+After running the above commands, both Terraform core and the `template`
+provider will both be installed in the current `GOPATH` and `$GOPATH/bin`
+will contain both `terraform` and `terraform-provider-template` executables.
+This `terraform` executable will find and use the `template` provider plugin
+alongside it in the `bin` directory in preference to downloading and installing
+an official release.
+
+When constructing a new provider from scratch, it's recommended to follow
+a similar repository structure as for the existing providers, with the main
+package in the repository root and a library package in a subdirectory named
+after the provider. For more information, see
+[the custom providers guide](/guides/writing-custom-terraform-providers.html).
+
 ## Low-Level Interface
 
 The interface you must implement for providers is
